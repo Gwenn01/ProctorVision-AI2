@@ -1,29 +1,58 @@
 import os, io, base64
 from pathlib import Path
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, make_response
+from flask_cors import cross_origin  # ✅ required for CORS fixes
 import tensorflow as tf
 import numpy as np
 from PIL import Image
+from database.connection import get_db_connection
 
+# =============================================================
+# ✅ Blueprint Initialization
+# =============================================================
+classification_bp = Blueprint("classification_bp", __name__)
+
+# ✅ Add CORS headers to all responses (fixes missing headers on preflight)
+@classification_bp.after_request
+def add_cors_headers(response):
+    response.headers.add("Access-Control-Allow-Origin", "https://proctor-vision-client.vercel.app")
+    response.headers.add("Access-Control-Allow-Headers", "Content-Type,Authorization")
+    response.headers.add("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
+    response.headers.add("Access-Control-Allow-Credentials", "true")
+    return response
+
+# ✅ Handle OPTIONS preflight requests explicitly
+@classification_bp.route("/<path:path>", methods=["OPTIONS"])
+@cross_origin(
+    origins=[
+        "https://proctor-vision-client.vercel.app",
+        "https://proctorvision-client.vercel.app",
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+    ]
+)
+def options_handler(path):
+    """Handles all OPTIONS preflight requests"""
+    return make_response(jsonify({"status": "ok"}), 200)
+
+
+# =============================================================
+# ✅ TensorFlow / Model Setup
+# =============================================================
 try:
     # TF-bundled Keras (common with TensorFlow installs)
     from tensorflow.keras.applications import mobilenet_v2 as _mv2  # type: ignore
 except Exception:
-    # Standalone Keras 3
+    # Standalone Keras 3 fallback
     from keras.applications import mobilenet_v2 as _mv2  # type: ignore
 
 preprocess_input = _mv2.preprocess_input
 
-from database.connection import get_db_connection
-
-classification_bp = Blueprint('classification_bp', __name__)
-
-# ---------- Model & threshold loading ----------
-BASE_DIR  = Path(__file__).resolve().parent.parent   # -> server/
+BASE_DIR = Path(__file__).resolve().parent.parent
 MODEL_DIR = BASE_DIR / "model"
 
 CANDIDATES = [
-    "cheating_mobilenetv2_final.keras",  # your chosen deploy name
+    "cheating_mobilenetv2_final.keras",
     "mnv2_clean_best.keras",
     "mnv2_continue.keras",
     "mnv2_finetune_best.keras",
@@ -32,10 +61,10 @@ CANDIDATES = [
 model_path = next((MODEL_DIR / f for f in CANDIDATES if (MODEL_DIR / f).exists()), None)
 if model_path and model_path.exists():
     model = tf.keras.models.load_model(model_path, compile=False)
-    print(f" Model loaded: {model_path}")
+    print(f"✅ Model loaded: {model_path}")
 else:
     model = None
-    print(f" No model file found in {MODEL_DIR}. Put one of: {CANDIDATES}")
+    print(f"⚠️ No model file found in {MODEL_DIR}. Put one of: {CANDIDATES}")
 
 thr_file = MODEL_DIR / "best_threshold.npy"
 THRESHOLD = float(np.load(thr_file)[0]) if thr_file.exists() else 0.555
@@ -47,61 +76,63 @@ if model is not None:
 else:
     H, W = 224, 224  # fallback
 
-# Class mapping used in training:
-# class 0 -> "cheating", class 1 -> "non-cheating"
 LABELS = ["Cheating", "Not Cheating"]
 
+# =============================================================
+# ✅ Utility Functions
+# =============================================================
 def preprocess_pil(pil_img: Image.Image) -> np.ndarray:
     """Convert PIL -> model-ready tensor (1, H, W, 3) using MobileNetV2 preprocessing."""
     img = pil_img.convert("RGB")
     if img.size != (W, H):
         img = img.resize((W, H), Image.BILINEAR)
     x = np.asarray(img, dtype=np.float32)
-    x = preprocess_input(x)          # <- IMPORTANT: same preprocessing as training
+    x = preprocess_input(x)
     return np.expand_dims(x, 0)
 
+
 def predict_batch(batch_np: np.ndarray) -> np.ndarray:
-    """batch_np: (N, H, W, 3) already preprocessed; returns probs of class 1 (non-cheating)."""
+    """Predict batch and return probability of 'Not Cheating'."""
     probs = model.predict(batch_np, verbose=0).ravel()
-    # If model outputs 2 logits (softmax), convert to class-1 prob
-    if probs.ndim == 0:    # single item edge case
+    if probs.ndim == 0:
         probs = np.array([probs])
     if len(probs) != batch_np.shape[0]:
-        # Handle (N,2) softmax output
         raw = model.predict(batch_np, verbose=0)
         if raw.ndim == 2 and raw.shape[1] == 2:
-            probs = raw[:, 1]  # prob for class index 1 => "Not Cheating"
+            probs = raw[:, 1]
         else:
             probs = raw.ravel()
     return probs
 
+
 def label_from_prob(prob_non_cheating: float) -> str:
-    """prob = P(class 1 = 'Not Cheating')"""
+    """Return label based on probability threshold."""
     return LABELS[int(prob_non_cheating >= THRESHOLD)]
-# ------------------------------------------------
 
 
-# -------- Route 1: classify uploaded multiple files --------
-@classification_bp.route('/classify_multiple', methods=['POST'])
+# =============================================================
+# ✅ Route 1: classify uploaded multiple files
+# =============================================================
+@classification_bp.route("/classify_multiple", methods=["POST"])
+@cross_origin()  # ensure CORS headers for direct calls
 def classify_multiple():
     if model is None:
         return jsonify({"error": "Model not loaded."}), 500
 
-    files = request.files.getlist('files') if 'files' in request.files else []
+    files = request.files.getlist("files") if "files" in request.files else []
     if not files:
         return jsonify({"error": "No files uploaded"}), 400
 
-    # Preprocess all, predict in one batch (faster & avoids TF retracing spam)
     batch = []
     for f in files:
         try:
             pil = Image.open(io.BytesIO(f.read()))
-            batch.append(preprocess_pil(pil)[0])  # (H,W,3)
+            batch.append(preprocess_pil(pil)[0])
         except Exception as e:
             return jsonify({"error": f"Error reading an image: {str(e)}"}), 400
 
-    batch_np = np.stack(batch, axis=0)  # (N,H,W,3)
-    probs = predict_batch(batch_np)     # prob of class 1 (Not Cheating)
+    batch_np = np.stack(batch, axis=0)
+    probs = predict_batch(batch_np)
     labels = [label_from_prob(p) for p in probs]
 
     return jsonify({
@@ -110,15 +141,18 @@ def classify_multiple():
     })
 
 
-# -------- Route 2: auto-classify behavior logs --------
-@classification_bp.route('/classify_behavior_logs', methods=['POST'])
+# =============================================================
+# ✅ Route 2: classify suspicious behavior logs (DB)
+# =============================================================
+@classification_bp.route("/classify_behavior_logs", methods=["POST"])
+@cross_origin()  # ensure this specific route works with frontend
 def classify_behavior_logs():
     if model is None:
         return jsonify({"error": "Model not loaded."}), 500
 
     data = request.get_json(silent=True) or {}
-    user_id = data.get('user_id')
-    exam_id = data.get('exam_id')
+    user_id = data.get("user_id")
+    exam_id = data.get("exam_id")
     if not user_id or not exam_id:
         return jsonify({"error": "Missing user_id or exam_id"}), 400
 
@@ -132,20 +166,18 @@ def classify_behavior_logs():
         """, (user_id, exam_id))
         logs = cursor.fetchall()
 
-        # Vectorized predict in chunks
         CHUNK = 64
         for i in range(0, len(logs), CHUNK):
             chunk = logs[i:i+CHUNK]
-            batch = []
-            ids = []
+            batch, ids = [], []
             for log in chunk:
                 try:
-                    img_data = base64.b64decode(log['image_base64'])
+                    img_data = base64.b64decode(log["image_base64"])
                     pil = Image.open(io.BytesIO(img_data))
                     batch.append(preprocess_pil(pil)[0])
-                    ids.append(log['id'])
+                    ids.append(log["id"])
                 except Exception as e:
-                    print(f" Failed to read image ID {log['id']}: {e}")
+                    print(f"⚠️ Failed to read image ID {log['id']}: {e}")
 
             if not batch:
                 continue
@@ -154,7 +186,6 @@ def classify_behavior_logs():
             probs = predict_batch(batch_np)
             labels = [label_from_prob(p) for p in probs]
 
-            # write back
             cur2 = conn.cursor()
             for _id, lbl in zip(ids, labels):
                 cur2.execute(

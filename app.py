@@ -24,25 +24,22 @@ os.makedirs(MPLCONFIGDIR, exist_ok=True)
 # =============================================================
 app = Flask(__name__)
 
-# Allow frontend origins for production and local testing
+#from flask_cors import CORS
+
 CORS(
     app,
-    resources={
-        r"/api/*": {
-            "origins": [
-                "http://localhost:3000",
-                "http://127.0.0.1:3000",
-                "https://proctorvision-client.vercel.app",
-                "https://proctor-vision-client.vercel.app",  # ✅ add this exact one
-                r"https://.*\.vercel\.app"                   # ✅ wildcard for any Vercel preview
-            ]
-        }
-    },
+    origins=[
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "https://proctorvision-client.vercel.app",
+        "https://proctor-vision-client.vercel.app",
+        r"https://.*\.vercel\.app",
+    ],
     supports_credentials=True,
     allow_headers=["Content-Type", "Authorization"],
-    methods=["GET", "POST", "OPTIONS"]
+    methods=["GET", "POST", "OPTIONS"],
+    resources={r"/*": {"origins": "*"}},  # ✅ ensure preflight applies globally
 )
-
 
 # =============================================================
 # 🔍 Import Blueprint (Classification)
