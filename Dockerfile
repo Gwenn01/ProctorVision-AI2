@@ -1,42 +1,47 @@
-FROM python:3.10-bullseye
+# ================================================
+# 🐍 Base Image
+# ================================================
+FROM python:3.10-slim-bullseye
 
-# --- Install system dependencies (for OpenCV, MediaPipe, TensorFlow, aiortc, PyAV)
+# ================================================
+# ⚙️ Install required system dependencies
+# ================================================
 RUN apt-get update && apt-get install -y \
     libgl1 \
     libglib2.0-0 \
     libatlas-base-dev \
     ffmpeg \
     pkg-config \
-    libavformat-dev \
-    libavcodec-dev \
-    libavdevice-dev \
-    libavutil-dev \
-    libavfilter-dev \
-    libswscale-dev \
-    libswresample-dev \
-    libv4l-dev \
-    libssl-dev \
-    libffi-dev \
     build-essential \
     cmake \
     git \
     && rm -rf /var/lib/apt/lists/*
 
-# --- Work directory
+# ================================================
+# 📦 Set working directory
+# ================================================
 WORKDIR /app
 
-# --- Copy dependencies first for caching
-COPY requirements.txt .
+# ================================================
+# 📄 Copy and install dependencies
+# ================================================
+COPY requirements.txt ./
+RUN pip install --upgrade pip setuptools wheel && \
+    pip install --no-cache-dir -r requirements.txt
 
-# --- Upgrade pip and install requirements
-RUN pip install --upgrade pip setuptools wheel
-RUN pip install --no-cache-dir --verbose -r requirements.txt
-
-# --- Copy all source files
+# ================================================
+# 📁 Copy all source files
+# ================================================
 COPY . .
 
-# --- Expose default HF Space port
-EXPOSE 7860
+# ================================================
+# 🌐 Expose Railway’s dynamic port
+# ================================================
+EXPOSE 8080
 
-# --- Start Flask app
-CMD ["python", "app.py"]
+# ================================================
+# 🚀 Start app using Gunicorn (Production WSGI)
+# ================================================
+# Railway automatically sets the PORT environment variable.
+# Use 0.0.0.0 to allow external access.
+CMD ["gunicorn", "app:app", "--workers", "2", "--threads", "4", "--timeout", "300", "--bind", "0.0.0.0:8080"]

@@ -1,7 +1,16 @@
+# --- Web Framework ---
 Flask==3.0.3
 Flask-Cors==4.0.0
+gunicorn==23.0.0
+
+# --- Core Scientific Stack ---
 numpy==1.26.4
 Pillow==10.3.0
-tensorflow-cpu==2.15.0
-requests==2.31.0
-gunicorn==21.2.0
+
+# --- TensorFlow (CPU-only for smaller Railway build) ---
+tensorflow==2.15.0
+keras==2.15.0
+h5py==3.10.0
+
+# --- Networking & API Calls ---
+requests==2.32.3
