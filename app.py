@@ -2,6 +2,9 @@ import os
 import traceback
 from flask import Flask, jsonify
 from flask_cors import CORS
+import sys
+sys.stdout.reconfigure(line_buffering=True)  # ✅ force instant flush of print()
+sys.stderr.reconfigure(line_buffering=True)
 
 # =============================================================
 # ✅ Environment Configuration

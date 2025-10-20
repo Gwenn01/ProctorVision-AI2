@@ -6,6 +6,7 @@ import tensorflow as tf
 import numpy as np
 from PIL import Image
 from database.connection import get_db_connection
+import traceback
 
 # =============================================================
 # ✅ Blueprint Initialization
@@ -208,4 +209,7 @@ def classify_behavior_logs():
         return jsonify({"message": "Classification complete.", "threshold": THRESHOLD}), 200
 
     except Exception as e:
+        print("🚨 Exception inside /classify_behavior_logs route:", file=sys.stderr)
+        traceback.print_exc()
         return jsonify({"error": str(e)}), 500
+
