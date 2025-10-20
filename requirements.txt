@@ -14,6 +14,3 @@ h5py==3.10.0
 
 # --- Networking & API Calls ---
 requests==2.32.3
-
-# --- Computer Vision (required for cv2) ---
-opencv-python-headless==4.10.0.84
