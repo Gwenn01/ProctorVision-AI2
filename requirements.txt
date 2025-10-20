@@ -14,3 +14,6 @@ h5py==3.10.0
 
 # --- Networking & API Calls ---
 requests==2.32.3
+
+# --- Database Connector ---
+mysql-connector-python==8.3.0
