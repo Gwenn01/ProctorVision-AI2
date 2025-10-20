@@ -1,7 +1,7 @@
 import os, io, base64
 from pathlib import Path
 from flask import Blueprint, request, jsonify, make_response
-from flask_cors import cross_origin  # ✅ required for CORS fixes
+from flask_cors import cross_origin
 import tensorflow as tf
 import numpy as np
 from PIL import Image
@@ -12,16 +12,7 @@ from database.connection import get_db_connection
 # =============================================================
 classification_bp = Blueprint("classification_bp", __name__)
 
-# ✅ Add CORS headers to all responses (fixes missing headers on preflight)
-@classification_bp.after_request
-def add_cors_headers(response):
-    response.headers.add("Access-Control-Allow-Origin", "https://proctor-vision-client.vercel.app")
-    response.headers.add("Access-Control-Allow-Headers", "Content-Type,Authorization")
-    response.headers.add("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
-    response.headers.add("Access-Control-Allow-Credentials", "true")
-    return response
-
-# ✅ Handle OPTIONS preflight requests explicitly
+# ✅ Handle OPTIONS preflight requests globally (before POST)
 @classification_bp.route("/<path:path>", methods=["OPTIONS"])
 @cross_origin(
     origins=[
@@ -29,22 +20,25 @@ def add_cors_headers(response):
         "https://proctorvision-client.vercel.app",
         "http://localhost:3000",
         "http://127.0.0.1:3000",
-    ]
+    ],
+    supports_credentials=True,
 )
-def options_handler(path):
-    """Handles all OPTIONS preflight requests"""
-    return make_response(jsonify({"status": "ok"}), 200)
-
+def handle_preflight(path):
+    """Handles all OPTIONS preflight requests for API endpoints."""
+    response = make_response(jsonify({"status": "ok"}), 200)
+    response.headers["Access-Control-Allow-Origin"] = request.headers.get("Origin", "*")
+    response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+    response.headers["Access-Control-Allow-Credentials"] = "true"
+    return response
 
 # =============================================================
 # ✅ TensorFlow / Model Setup
 # =============================================================
 try:
-    # TF-bundled Keras (common with TensorFlow installs)
-    from tensorflow.keras.applications import mobilenet_v2 as _mv2  # type: ignore
+    from tensorflow.keras.applications import mobilenet_v2 as _mv2
 except Exception:
-    # Standalone Keras 3 fallback
-    from keras.applications import mobilenet_v2 as _mv2  # type: ignore
+    from keras.applications import mobilenet_v2 as _mv2
 
 preprocess_input = _mv2.preprocess_input
 
@@ -68,13 +62,12 @@ else:
 
 thr_file = MODEL_DIR / "best_threshold.npy"
 THRESHOLD = float(np.load(thr_file)[0]) if thr_file.exists() else 0.555
-print(f"Using decision threshold: {THRESHOLD:.3f}")
+print(f"📊 Using decision threshold: {THRESHOLD:.3f}")
 
-# Input size
 if model is not None:
     H, W = model.input_shape[1:3]
 else:
-    H, W = 224, 224  # fallback
+    H, W = 224, 224
 
 LABELS = ["Cheating", "Not Cheating"]
 
@@ -82,7 +75,7 @@ LABELS = ["Cheating", "Not Cheating"]
 # ✅ Utility Functions
 # =============================================================
 def preprocess_pil(pil_img: Image.Image) -> np.ndarray:
-    """Convert PIL -> model-ready tensor (1, H, W, 3) using MobileNetV2 preprocessing."""
+    """Convert PIL image -> model-ready tensor (1, H, W, 3)."""
     img = pil_img.convert("RGB")
     if img.size != (W, H):
         img = img.resize((W, H), Image.BILINEAR)
@@ -109,12 +102,19 @@ def label_from_prob(prob_non_cheating: float) -> str:
     """Return label based on probability threshold."""
     return LABELS[int(prob_non_cheating >= THRESHOLD)]
 
-
 # =============================================================
 # ✅ Route 1: classify uploaded multiple files
 # =============================================================
 @classification_bp.route("/classify_multiple", methods=["POST"])
-@cross_origin()  # ensure CORS headers for direct calls
+@cross_origin(
+    origins=[
+        "https://proctor-vision-client.vercel.app",
+        "https://proctorvision-client.vercel.app",
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+    ],
+    supports_credentials=True,
+)
 def classify_multiple():
     if model is None:
         return jsonify({"error": "Model not loaded."}), 500
@@ -137,15 +137,25 @@ def classify_multiple():
 
     return jsonify({
         "threshold": THRESHOLD,
-        "results": [{"label": lbl, "prob_non_cheating": float(p)} for lbl, p in zip(labels, probs)]
+        "results": [
+            {"label": lbl, "prob_non_cheating": float(p)}
+            for lbl, p in zip(labels, probs)
+        ],
     })
-
 
 # =============================================================
 # ✅ Route 2: classify suspicious behavior logs (DB)
 # =============================================================
 @classification_bp.route("/classify_behavior_logs", methods=["POST"])
-@cross_origin()  # ensure this specific route works with frontend
+@cross_origin(
+    origins=[
+        "https://proctor-vision-client.vercel.app",
+        "https://proctorvision-client.vercel.app",
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+    ],
+    supports_credentials=True,
+)
 def classify_behavior_logs():
     if model is None:
         return jsonify({"error": "Model not loaded."}), 500
