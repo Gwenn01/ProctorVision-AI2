@@ -8,8 +8,8 @@ numpy==1.26.4
 Pillow==10.3.0
 
 # --- TensorFlow & Keras ---
-tensorflow==2.15.0
-keras==2.15.0
+tensorflow==2.17.0
+keras==3.3.3
 h5py==3.10.0
 
 # --- Networking & API Calls ---
