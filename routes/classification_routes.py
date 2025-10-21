@@ -1,4 +1,4 @@
-import os, io, base64
+import os, io, base64, sys, traceback, requests
 from pathlib import Path
 from flask import Blueprint, request, jsonify, make_response
 from flask_cors import cross_origin
@@ -6,7 +6,6 @@ import tensorflow as tf
 import numpy as np
 from PIL import Image
 from database.connection import get_db_connection
-import traceback
 
 # =============================================================
 # ✅ Blueprint Initialization
@@ -33,6 +32,7 @@ def handle_preflight(path):
     response.headers["Access-Control-Allow-Credentials"] = "true"
     return response
 
+
 # =============================================================
 # ✅ TensorFlow / Model Setup
 # =============================================================
@@ -45,24 +45,49 @@ preprocess_input = _mv2.preprocess_input
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 MODEL_DIR = BASE_DIR / "model"
+os.makedirs(MODEL_DIR, exist_ok=True)
 
-CANDIDATES = [
-    "cheating_mobilenetv2_final.keras",
-    "mnv2_clean_best.keras",
-    "mnv2_continue.keras",
-    "mnv2_finetune_best.keras",
-]
+# Hugging Face hosted model and threshold
+MODEL_URLS = {
+    "model": "https://huggingface.co/Gwen01/ProctorVision-Models/resolve/main/cheating_mobilenetv2_final.keras",
+    "threshold": "https://huggingface.co/Gwen01/ProctorVision-Models/resolve/main/best_threshold.npy",
+}
 
-model_path = next((MODEL_DIR / f for f in CANDIDATES if (MODEL_DIR / f).exists()), None)
-if model_path and model_path.exists():
-    model = tf.keras.models.load_model(model_path, compile=False)
-    print(f"✅ Model loaded: {model_path}")
-else:
+MODEL_PATH = MODEL_DIR / "cheating_mobilenetv2_final.keras"
+THRESHOLD_PATH = MODEL_DIR / "best_threshold.npy"
+
+def download_if_missing(url: str, dest: Path):
+    """Download file from Hugging Face if not already cached locally."""
+    try:
+        if not dest.exists() or dest.stat().st_size < 10000:  # assume too small = invalid
+            print(f"📥 Downloading {dest.name} from {url}...")
+            r = requests.get(url)
+            r.raise_for_status()
+            with open(dest, "wb") as f:
+                f.write(r.content)
+            print(f"✅ Downloaded {dest.name} ({dest.stat().st_size / 1_000_000:.2f} MB)")
+        else:
+            print(f"✅ {dest.name} already exists ({dest.stat().st_size / 1_000_000:.2f} MB)")
+    except Exception as e:
+        print(f"🚨 Failed to download {dest.name}: {e}")
+
+# Download model + threshold from Hugging Face
+download_if_missing(MODEL_URLS["model"], MODEL_PATH)
+download_if_missing(MODEL_URLS["threshold"], THRESHOLD_PATH)
+
+# Load TensorFlow model
+try:
+    model = tf.keras.models.load_model(MODEL_PATH, compile=False)
+    print(f"✅ Model loaded successfully from {MODEL_PATH}")
+except Exception as e:
     model = None
-    print(f"⚠️ No model file found in {MODEL_DIR}. Put one of: {CANDIDATES}")
+    print(f"🚨 Failed to load model: {e}")
 
-thr_file = MODEL_DIR / "best_threshold.npy"
-THRESHOLD = float(np.load(thr_file)[0]) if thr_file.exists() else 0.555
+# Load threshold
+try:
+    THRESHOLD = float(np.load(THRESHOLD_PATH)[0])
+except Exception:
+    THRESHOLD = 0.555
 print(f"📊 Using decision threshold: {THRESHOLD:.3f}")
 
 if model is not None:
@@ -71,6 +96,7 @@ else:
     H, W = 224, 224
 
 LABELS = ["Cheating", "Not Cheating"]
+
 
 # =============================================================
 # ✅ Utility Functions
@@ -102,6 +128,7 @@ def predict_batch(batch_np: np.ndarray) -> np.ndarray:
 def label_from_prob(prob_non_cheating: float) -> str:
     """Return label based on probability threshold."""
     return LABELS[int(prob_non_cheating >= THRESHOLD)]
+
 
 # =============================================================
 # ✅ Route 1: classify uploaded multiple files
@@ -143,6 +170,7 @@ def classify_multiple():
             for lbl, p in zip(labels, probs)
         ],
     })
+
 
 # =============================================================
 # ✅ Route 2: classify suspicious behavior logs (DB)
@@ -212,4 +240,3 @@ def classify_behavior_logs():
         print("🚨 Exception inside /classify_behavior_logs route:", file=sys.stderr)
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
-
